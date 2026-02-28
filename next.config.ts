@@ -1,13 +1,8 @@
-import withSerwistInit from "@serwist/next";
 import type { NextConfig } from "next";
 
-const withSerwist = withSerwistInit({
-  swSrc: "src/app/sw.ts",
-  swDest: "public/sw.js",
-});
-
 const nextConfig: NextConfig = {
-  turbopack: {},
+  output: "export",
+  images: { unoptimized: true },
 };
 
-export default withSerwist(nextConfig);
+export default nextConfig;

@@ -29,14 +29,12 @@ export function TiptapEditor() {
             },
         },
         onUpdate: ({ editor }) => {
-            // Debounced save
             if (saveTimeoutRef.current) {
                 clearTimeout(saveTimeoutRef.current);
             }
 
             saveTimeoutRef.current = setTimeout(async () => {
                 try {
-                    // Fetch existing doc to keep createdAt if it exists
                     const existing = await getDocument(DOC_ID);
                     const now = Date.now();
 
@@ -48,7 +46,7 @@ export function TiptapEditor() {
                         createdAt: existing ? existing.createdAt : now,
                     });
                 } catch (error) {
-                    console.error("Failed to save to IndexedDB", error);
+                    console.error("Failed to save document:", error);
                 }
             }, 1000);
         },
@@ -65,7 +63,6 @@ export function TiptapEditor() {
         },
     });
 
-    // Load document from IndexedDB on mount
     useEffect(() => {
         let isMounted = true;
 
@@ -76,7 +73,7 @@ export function TiptapEditor() {
                     editor.commands.setContent(doc.content as any);
                 }
             } catch (err) {
-                console.error("Error loading document from DB:", err);
+                console.error("Error loading document:", err);
             } finally {
                 if (isMounted) {
                     setIsLoaded(true);
@@ -103,7 +100,6 @@ export function TiptapEditor() {
             if (!editor || !e.detail?.text) return;
             const currentSelection = editor.state.selection;
             if (!currentSelection.empty) {
-                // Insert text AFTER the current selection and an empty line
                 editor.commands.insertContentAt(
                     currentSelection.to,
                     `\n\n${e.detail.text}`

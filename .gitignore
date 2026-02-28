@@ -38,8 +38,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# serwist
-public/sw.js
-public/sw.js.map
-public/swe-worker-*.js
-public/swe-worker-*.js.map
+# tauri
+src-tauri/target/
+src-tauri/gen/
