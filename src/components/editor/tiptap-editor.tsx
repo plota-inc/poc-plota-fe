@@ -3,23 +3,33 @@
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
-import { useEffect, useRef, useState } from "react";
+import { BubbleMenu } from "@tiptap/react/menus";
+import { useEffect, useRef, useCallback } from "react";
 import { useAIStore } from "@/stores/ai-store";
+import { useDocumentStore } from "@/stores/document-store";
 import { saveDocument, getDocument } from "@/lib/db";
-
-const DOC_ID = "default-doc";
+import { Button } from "@/components/ui/button";
+import { Sparkles, PenTool, Expand } from "lucide-react";
+import { useI18nStore } from "@/stores/i18n-store";
 
 export function TiptapEditor() {
-    const [isLoaded, setIsLoaded] = useState(false);
-    const setSelectedText = useAIStore((state) => state.setSelectedText);
+    const { setSelectedText, setContext, setActiveMode, activeMode, setStatus, startNewConversation } = useAIStore();
+    const currentDocId = useDocumentStore((s) => s.currentDocId);
+    const refreshDocumentInList = useDocumentStore((s) => s.refreshDocumentInList);
     const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const currentDocIdRef = useRef(currentDocId);
+    const { t } = useI18nStore();
+
+    useEffect(() => {
+        currentDocIdRef.current = currentDocId;
+    }, [currentDocId]);
 
     const editor = useEditor({
         immediatelyRender: false,
         extensions: [
             StarterKit,
             Placeholder.configure({
-                placeholder: "Start writing your story here...",
+                placeholder: t("editor.placeholder"),
             }),
         ],
         content: "",
@@ -29,22 +39,26 @@ export function TiptapEditor() {
             },
         },
         onUpdate: ({ editor }) => {
+            const docId = currentDocIdRef.current;
+            if (!docId) return;
+
             if (saveTimeoutRef.current) {
                 clearTimeout(saveTimeoutRef.current);
             }
 
             saveTimeoutRef.current = setTimeout(async () => {
                 try {
-                    const existing = await getDocument(DOC_ID);
+                    const existing = await getDocument(docId);
                     const now = Date.now();
-
-                    await saveDocument({
-                        id: DOC_ID,
-                        title: existing?.title || "Untitled Document",
+                    const doc = {
+                        id: docId,
+                        title: existing?.title || "",
                         content: editor.getJSON(),
                         updatedAt: now,
                         createdAt: existing ? existing.createdAt : now,
-                    });
+                    };
+                    await saveDocument(doc);
+                    refreshDocumentInList(doc);
                 } catch (error) {
                     console.error("Failed to save document:", error);
                 }
@@ -55,38 +69,56 @@ export function TiptapEditor() {
 
             if (empty) {
                 setSelectedText("");
+                setContext("", "");
                 return;
             }
 
-            const text = editor.state.doc.textBetween(from, to, " ");
+            const doc = editor.state.doc;
+            const text = doc.textBetween(from, to, " ");
             setSelectedText(text);
+
+            const MAX_CONTEXT_CHARS = 1000;
+            const rawBefore = doc.textBetween(0, from, "\n");
+            const rawAfter = doc.textBetween(to, doc.content.size, "\n");
+            setContext(
+                rawBefore.slice(-MAX_CONTEXT_CHARS),
+                rawAfter.slice(0, MAX_CONTEXT_CHARS),
+            );
+
+            if (empty && useAIStore.getState().status !== "generating") {
+                setActiveMode("none");
+            }
         },
     });
 
-    useEffect(() => {
-        let isMounted = true;
-
-        async function loadData() {
-            try {
-                const doc = await getDocument(DOC_ID);
-                if (doc && isMounted && editor) {
-                    editor.commands.setContent(doc.content as any);
-                }
-            } catch (err) {
-                console.error("Error loading document:", err);
-            } finally {
-                if (isMounted) {
-                    setIsLoaded(true);
-                }
+    const loadDocContent = useCallback(async (docId: string) => {
+        if (!editor) return;
+        try {
+            const doc = await getDocument(docId);
+            if (doc && doc.content) {
+                editor.commands.setContent(doc.content as any);
+            } else {
+                editor.commands.clearContent();
             }
+        } catch (err) {
+            console.error("Error loading document:", err);
+            editor.commands.clearContent();
         }
+    }, [editor]);
 
-        if (editor && !isLoaded) {
-            loadData();
+    useEffect(() => {
+        if (!editor || !currentDocId) {
+            if (editor) editor.commands.clearContent();
+            return;
         }
+        loadDocContent(currentDocId);
+    }, [editor, currentDocId, loadDocContent]);
+
+    useEffect(() => {
+        if (!editor) return;
 
         const handleReplace = (e: any) => {
-            if (!editor || !e.detail?.text) return;
+            if (!e.detail?.text) return;
             const currentSelection = editor.state.selection;
             if (!currentSelection.empty) {
                 editor.commands.insertContentAt(
@@ -97,7 +129,7 @@ export function TiptapEditor() {
         };
 
         const handleInsert = (e: any) => {
-            if (!editor || !e.detail?.text) return;
+            if (!e.detail?.text) return;
             const currentSelection = editor.state.selection;
             if (!currentSelection.empty) {
                 editor.commands.insertContentAt(
@@ -111,18 +143,53 @@ export function TiptapEditor() {
         window.addEventListener('editor:insert', handleInsert);
 
         return () => {
-            isMounted = false;
             window.removeEventListener('editor:replace', handleReplace);
             window.removeEventListener('editor:insert', handleInsert);
         };
-    }, [editor, isLoaded]);
+    }, [editor]);
 
-    if (!editor || !isLoaded) {
+    if (!editor) {
         return <div className="animate-pulse bg-muted/20 h-96 w-full rounded-md" />;
     }
 
     return (
-        <div className="tiptap-editor-wrapper">
+        <div className="tiptap-editor-wrapper relative">
+            {editor && (
+                <BubbleMenu
+                    editor={editor}
+                    className="flex items-center gap-1 p-1 bg-zinc-900 border border-zinc-800 rounded-lg shadow-xl"
+                >
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 text-xs font-medium text-zinc-300 hover:text-white hover:bg-zinc-800 focus:bg-zinc-800"
+                        onClick={() => startNewConversation("rewrite")}
+                    >
+                        <PenTool className="w-3.5 h-3.5 mr-1.5" />
+                        {t("editor.rewrite")}
+                    </Button>
+                    <div className="w-[1px] h-4 bg-zinc-800" />
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 text-xs font-medium text-zinc-300 hover:text-white hover:bg-zinc-800 focus:bg-zinc-800"
+                        onClick={() => startNewConversation("describe")}
+                    >
+                        <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                        {t("editor.describe")}
+                    </Button>
+                    <div className="w-[1px] h-4 bg-zinc-800" />
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 text-xs font-medium text-zinc-300 hover:text-white hover:bg-zinc-800 focus:bg-zinc-800"
+                        onClick={() => startNewConversation("expand")}
+                    >
+                        <Expand className="w-3.5 h-3.5 mr-1.5" />
+                        {t("editor.expand")}
+                    </Button>
+                </BubbleMenu>
+            )}
             <EditorContent editor={editor} />
         </div>
     );

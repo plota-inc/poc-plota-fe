@@ -39,6 +39,8 @@ export async function listModels(): Promise<OllamaModel[]> {
   return data.models ?? [];
 }
 
+const CJK_REGEX = /[\u4E00-\u9FFF\u3400-\u4DBF]/;
+
 export async function generate(
   prompt: string,
   systemInstruction: string,
@@ -61,6 +63,9 @@ export async function generate(
         { role: "user", content: prompt },
       ],
       stream: true,
+      options: {
+        stop: ["---", "```", "##", "**Note", "注意", "这样"],
+      },
     }),
     signal: currentAbortController.signal,
   });
@@ -83,17 +88,27 @@ export async function generate(
       const chunk = decoder.decode(value, { stream: true });
       const lines = chunk.split("\n");
 
+      let cjkDetected = false;
       for (const line of lines) {
         if (!line.trim()) continue;
         try {
           const json = JSON.parse(line);
           if (json.message?.content) {
+            if (CJK_REGEX.test(json.message.content)) {
+              cjkDetected = true;
+              break;
+            }
             onToken(json.message.content);
             numTokens++;
           }
         } catch {
           // skip malformed JSON lines
         }
+      }
+
+      if (cjkDetected) {
+        currentAbortController?.abort();
+        break;
       }
     }
   } finally {

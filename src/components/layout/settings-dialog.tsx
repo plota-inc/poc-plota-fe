@@ -14,17 +14,26 @@ import { Separator } from "@/components/ui/separator";
 import {
   Settings,
   HardDrive,
-  Brain,
   FileText,
+  MessageSquare,
   Trash2,
   Loader2,
-  RefreshCw,
-  ExternalLink,
 } from "lucide-react";
 import { getDocumentStats, deleteAllDocuments } from "@/lib/db";
-import { listModels, checkHealth } from "@/lib/ollama-client";
-import { useModelStore } from "@/stores/model-store";
-import { openExternal } from "@/lib/utils";
+import {
+  getConversationStats,
+  deleteAllConversations,
+} from "@/lib/conversation-db";
+import { useAIStore } from "@/stores/ai-store";
+import { useI18nStore } from "@/stores/i18n-store";
+import { Language } from "@/i18n";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -34,70 +43,78 @@ function formatBytes(bytes: number): string {
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 }
 
-interface OllamaModelDisplay {
-  name: string;
-  size: number;
-  parameterSize: string;
-  quantizationLevel: string;
-}
-
 interface StorageInfo {
-  models: OllamaModelDisplay[];
   docs: { count: number; sizeBytes: number } | null;
+  convs: { count: number; sizeBytes: number } | null;
   loading: boolean;
-  ollamaOnline: boolean;
 }
 
 export function SettingsDialog() {
   const [open, setOpen] = useState(false);
   const [storage, setStorage] = useState<StorageInfo>({
-    models: [],
     docs: null,
+    convs: null,
     loading: false,
-    ollamaOnline: false,
   });
-  const [clearing, setClearing] = useState<"docs" | null>(null);
-  const { selectedModel, setSelectedModel, setAvailableModels } =
-    useModelStore();
+  const [clearing, setClearing] = useState<"docs" | "convs" | null>(null);
+  const [confirmTarget, setConfirmTarget] = useState<"docs" | "convs" | null>(null);
+  const { t, language, setLanguage } = useI18nStore();
 
   const loadStorageInfo = useCallback(async () => {
     setStorage((s) => ({ ...s, loading: true }));
+
+    let docs: { count: number; sizeBytes: number } | null = null;
+    let convs: { count: number; sizeBytes: number } | null = null;
+
     try {
-      const [ollamaOnline, docs] = await Promise.all([
-        checkHealth(),
-        getDocumentStats(),
-      ]);
-
-      let models: OllamaModelDisplay[] = [];
-      if (ollamaOnline) {
-        const ollamaModels = await listModels();
-        models = ollamaModels.map((m) => ({
-          name: m.name,
-          size: m.size,
-          parameterSize: m.details?.parameter_size ?? "N/A",
-          quantizationLevel: m.details?.quantization_level ?? "N/A",
-        }));
-        setAvailableModels(models);
-      }
-
-      setStorage({ models, docs, loading: false, ollamaOnline });
-    } catch {
-      setStorage((s) => ({ ...s, loading: false }));
+      docs = await getDocumentStats();
+    } catch (e) {
+      console.error("Failed to load document stats:", e);
     }
-  }, [setAvailableModels]);
+
+    try {
+      convs = await getConversationStats();
+    } catch (e) {
+      console.error("Failed to load conversation stats:", e);
+    }
+
+    setStorage({ docs, convs, loading: false });
+  }, []);
 
   useEffect(() => {
     if (open) loadStorageInfo();
   }, [open, loadStorageInfo]);
 
+  const { reset: resetAI } = useAIStore();
+  const conversations = useAIStore((s) => s.conversations);
+
+  const convCount = storage.convs?.count ?? conversations.length;
+
   const handleClearDocs = async () => {
-    if (!confirm("모든 문서가 삭제됩니다. 계속하시겠습니까?")) return;
+    setConfirmTarget(null);
     setClearing("docs");
     try {
       await deleteAllDocuments();
       await loadStorageInfo();
     } catch (e) {
       console.error("Failed to clear documents:", e);
+    }
+    setClearing(null);
+  };
+
+  const handleClearConversations = async () => {
+    setConfirmTarget(null);
+    setClearing("convs");
+    try {
+      await deleteAllConversations();
+    } catch (e) {
+      console.error("Failed to clear conversations from DB:", e);
+    }
+    resetAI();
+    try {
+      await loadStorageInfo();
+    } catch (e) {
+      console.error("Failed to reload storage info:", e);
     }
     setClearing(null);
   };
@@ -115,110 +132,54 @@ export function SettingsDialog() {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <HardDrive className="h-5 w-5" />
-            설정
+            {t("settings.title")}
           </DialogTitle>
           <DialogDescription>
-            Ollama 모델과 로컬 문서를 관리합니다.
+            {t("settings.description")}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
-          {/* Ollama models section */}
-          <div className="rounded-lg border p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Brain className="h-4 w-4 text-primary" />
-                <span className="text-sm font-medium">Ollama 모델</span>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-xs gap-1.5"
-                onClick={loadStorageInfo}
-                disabled={storage.loading}
-              >
-                <RefreshCw
-                  className={`h-3 w-3 ${storage.loading ? "animate-spin" : ""}`}
-                />
-                새로고침
-              </Button>
+          {/* Language section */}
+          <div className="rounded-lg border p-4 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">{t("settings.language")}</span>
             </div>
-
-            {!storage.ollamaOnline ? (
-              <div className="text-xs text-muted-foreground space-y-2">
-                <p>Ollama가 실행되고 있지 않습니다.</p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-xs gap-1.5"
-                  onClick={() => openExternal("https://ollama.com")}
-                >
-                  <ExternalLink className="h-3 w-3" />
-                  ollama.com에서 설치
-                </Button>
-              </div>
-            ) : storage.models.length === 0 ? (
-              <div className="text-xs text-muted-foreground space-y-1">
-                <p>설치된 모델이 없습니다.</p>
-                <p className="font-mono text-[10px] bg-muted p-2 rounded">
-                  터미널에서: ollama pull qwen2.5:7b
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {storage.models.map((model) => (
-                  <button
-                    key={model.name}
-                    onClick={() => setSelectedModel(model.name)}
-                    className={`w-full text-left rounded-md border p-2.5 transition-colors text-xs ${
-                      selectedModel === model.name
-                        ? "border-primary bg-primary/5"
-                        : "hover:bg-muted/50"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium font-mono">
-                        {model.name}
-                      </span>
-                      {selectedModel === model.name && (
-                        <span className="text-[10px] text-primary font-medium">
-                          사용 중
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex gap-3 mt-1 text-muted-foreground">
-                      <span>{model.parameterSize}</span>
-                      <span>{model.quantizationLevel}</span>
-                      <span>{formatBytes(model.size)}</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
+            <Select value={language} onValueChange={(v) => setLanguage(v as Language)}>
+              <SelectTrigger className="w-[120px] h-8 text-xs bg-background">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ko">한국어</SelectItem>
+                <SelectItem value="en">English</SelectItem>
+                <SelectItem value="zh">中文</SelectItem>
+                <SelectItem value="ja">日本語</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
-          <Separator />
+
 
           {/* Documents section */}
           <div className="rounded-lg border p-4 space-y-3">
             <div className="flex items-center gap-2">
               <FileText className="h-4 w-4 text-primary" />
-              <span className="text-sm font-medium">내 문서</span>
+              <span className="text-sm font-medium">{t("settings.myDocuments")}</span>
             </div>
 
             {storage.loading && !storage.docs ? (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Loader2 className="h-3 w-3 animate-spin" />
-                조회 중...
+                {t("settings.loading")}
               </div>
             ) : storage.docs ? (
               <div className="text-xs space-y-1 text-muted-foreground">
                 <div className="flex justify-between">
-                  <span>문서 수</span>
-                  <span className="font-mono">{storage.docs.count}개</span>
+                  <span>{t("settings.documentCount")}</span>
+                  <span className="font-mono">{storage.docs.count}{t("settings.countUnit")}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>총 용량</span>
+                  <span>{t("settings.totalSize")}</span>
                   <span className="font-mono font-medium text-foreground">
                     {formatBytes(storage.docs.sizeBytes)}
                   </span>
@@ -226,28 +187,108 @@ export function SettingsDialog() {
               </div>
             ) : (
               <p className="text-xs text-muted-foreground">
-                저장된 문서가 없습니다.
+                {t("settings.noDocuments")}
               </p>
             )}
 
-            <Button
-              variant="destructive"
-              size="sm"
-              className="w-full h-8 text-xs gap-1.5"
-              onClick={handleClearDocs}
-              disabled={
-                clearing !== null ||
-                !storage.docs ||
-                storage.docs.count === 0
-              }
-            >
-              {clearing === "docs" ? (
+            {confirmTarget === "docs" ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-destructive flex-1">{t("settings.confirmDeleteAll")}</span>
+                <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={handleClearDocs}>
+                  {t("settings.confirmYes")}
+                </Button>
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setConfirmTarget(null)}>
+                  {t("settings.confirmNo")}
+                </Button>
+              </div>
+            ) : (
+              <Button
+                variant="destructive"
+                size="sm"
+                className="w-full h-8 text-xs gap-1.5"
+                onClick={() => setConfirmTarget("docs")}
+                disabled={
+                  clearing !== null ||
+                  !storage.docs ||
+                  storage.docs.count === 0
+                }
+              >
+                {clearing === "docs" ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3 w-3" />
+                )}
+                {t("settings.deleteAllDocuments")}
+              </Button>
+            )}
+          </div>
+
+          <Separator />
+
+          {/* Conversations section */}
+          <div className="rounded-lg border p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="h-4 w-4 text-primary" />
+              <span className="text-sm font-medium">{t("settings.aiConversations")}</span>
+            </div>
+
+            {storage.loading && !storage.convs ? (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <Trash2 className="h-3 w-3" />
-              )}
-              모든 문서 삭제
-            </Button>
+                {t("settings.loading")}
+              </div>
+            ) : storage.convs ? (
+              <div className="text-xs space-y-1 text-muted-foreground">
+                <div className="flex justify-between">
+                  <span>{t("settings.conversationCount")}</span>
+                  <span className="font-mono">{storage.convs.count}{t("settings.countUnit")}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>{t("settings.totalSize")}</span>
+                  <span className="font-mono font-medium text-foreground">
+                    {formatBytes(storage.convs.sizeBytes)}
+                  </span>
+                </div>
+              </div>
+            ) : conversations.length > 0 ? (
+              <div className="text-xs space-y-1 text-muted-foreground">
+                <div className="flex justify-between">
+                  <span>{t("settings.conversationCount")}</span>
+                  <span className="font-mono">{conversations.length}{t("settings.countUnit")}</span>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                {t("settings.noConversations")}
+              </p>
+            )}
+
+            {confirmTarget === "convs" ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-destructive flex-1">{t("settings.confirmDeleteConversations")}</span>
+                <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={handleClearConversations}>
+                  {t("settings.confirmYes")}
+                </Button>
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setConfirmTarget(null)}>
+                  {t("settings.confirmNo")}
+                </Button>
+              </div>
+            ) : (
+              <Button
+                variant="destructive"
+                size="sm"
+                className="w-full h-8 text-xs gap-1.5"
+                onClick={() => setConfirmTarget("convs")}
+                disabled={clearing !== null || convCount === 0}
+              >
+                {clearing === "convs" ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3 w-3" />
+                )}
+                {t("settings.deleteAllConversations")}
+              </Button>
+            )}
           </div>
         </div>
       </DialogContent>

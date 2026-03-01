@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
-const APP_NAME = "Plota";
+const APP_NAME = "PLOTA VAULT";
 const APP_DESCRIPTION = "AI-powered writing assistant running locally on your desktop";
 
 export const metadata: Metadata = {

@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Plota",
+  "productName": "PLOTA VAULT",
   "version": "0.1.0",
   "identifier": "com.plota.app",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Plota",
+        "title": "PLOTA VAULT",
         "width": 1280,
         "height": 800,
         "minWidth": 900,
